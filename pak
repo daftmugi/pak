@@ -73,7 +73,14 @@ class PAK
   ENTRY_SIZE = 64
   ENTRY_PATH_LENGTH = 56
 
-  Header = Struct.new(:table_offset, :table_size, :num_entries, keyword_init: true)
+  Header = Struct.new(:table_offset, :table_size, :num_entries) do
+    def initialize(table_offset:, table_size: nil, num_entries: nil)
+      table_size = num_entries * ENTRY_SIZE if table_size.nil? && num_entries
+      num_entries = table_size / ENTRY_SIZE if num_entries.nil? && table_size
+      super(table_offset, table_size, num_entries)
+    end
+  end
+
   Entry = Struct.new(:path, :offset, :size, keyword_init: true)
 
   attr_reader :options
@@ -363,7 +370,7 @@ class PAK
 
   def each_pak_entry(pak_file, &block)
     header = read_header(pak_file)
-    table = extract_table(pak_file, header.table_offset, header.num_entries)
+    table = extract_table(header, pak_file)
 
     table.each do |entry|
       yield(entry)
@@ -374,13 +381,7 @@ class PAK
     pak_file.seek(4) # id(4)
     table_offset = read_int(pak_file)
     table_size = read_int(pak_file)
-    num_entries = table_size / ENTRY_SIZE
-
-    Header.new(
-      table_offset: table_offset,
-      table_size: table_size,
-      num_entries: num_entries
-    )
+    Header.new(table_offset: table_offset, table_size: table_size)
   end
 
   def read_path(file)
@@ -393,12 +394,12 @@ class PAK
     file.read(4).unpack("V")[0]
   end
 
-  def extract_table(pak_file, table_offset, num_files)
-    pak_file.seek(table_offset)
+  def extract_table(header, pak_file)
+    pak_file.seek(header.table_offset)
 
     table = []
 
-    (0...num_files).each do |i|
+    (0...header.num_entries).each do |i|
       path = read_path(pak_file)
       path = path.downcase if to_lower?
       offset = read_int(pak_file)
@@ -499,16 +500,7 @@ class PAK
   end
 
   def pipe_entry(entry, pak_file)
-    pak_file.seek(entry.offset)
-    chunk_size = 1024 * 1024
-    bytes_remaining = entry.size
-
-    while (bytes_remaining > 0)
-      read_size = [chunk_size, bytes_remaining].min()
-      bytes = pak_file.read(read_size)
-      written_size = $stdout.write(bytes)
-      bytes_remaining -= written_size
-    end
+    stream_entry(entry, pak_file, $stdout)
   end
 
 
@@ -543,7 +535,7 @@ class PAK
             handle_conflict_choice = handle_conflict(entry.path, handle_conflict_choice)
             case handle_conflict_choice
             when :yes, :all
-              write_entry(pak_file, write_path, entry)
+              write_entry(entry, pak_file, write_path)
               strings(:overwrite)
             else
               strings(:skip)
@@ -552,7 +544,7 @@ class PAK
             :file_path_has_file
           else
             mkdir_p(parent_path)
-            write_entry(pak_file, write_path, entry)
+            write_entry(entry, pak_file, write_path)
             strings(:extract)
           end
 
@@ -560,7 +552,7 @@ class PAK
         when :file_is_dir, :file_path_has_file
           error_message_1 =
             if status == :file_is_dir
-              "%s/ exists but is not a file" % [write_path]
+              "%s exists but is not a file" % [File.join(write_path, "")]
             else
               "%s exists but is not a directory" % [file_in_path]
             end
@@ -582,21 +574,11 @@ class PAK
     get_closest_file_in_path(parent)
   end
 
-  def write_entry(pak_file, write_path, entry)
+  def write_entry(entry, pak_file, file_path)
     return if noop?
-    pak_file.seek(entry.offset)
-    file = File.open(write_path, "wb")
-    chunk_size = 1024 * 1024
-    bytes_remaining = entry.size
-
-    while (bytes_remaining > 0)
-      read_size = [chunk_size, bytes_remaining].min()
-      bytes = pak_file.read(read_size)
-      written_size = file.write(bytes)
-      bytes_remaining -= written_size
+    File.open(file_path, "wb") do |file|
+      stream_entry(entry, pak_file, file)
     end
-
-    file.close()
   end
 
   def handle_conflict(path, previous_conflict_choice)
@@ -647,8 +629,9 @@ class PAK
     Dir.chdir(options[:root_path]) do
       new_pak_file(pak_path_expanded) do |pak_file|
         entries = archive_files(pak_file)
-        table_offset = archive_table(pak_file, entries)
-        archive_header(pak_file, table_offset, entries.size)
+        table_offset = archive_table(entries, pak_file)
+        header = Header.new(table_offset: table_offset, num_entries: entries.size)
+        archive_header(header, pak_file)
       end
     end
   end
@@ -662,19 +645,18 @@ class PAK
     end
   end
 
-  def archive_header(pak_file, table_offset, num_entries)
+  def archive_header(header, pak_file)
     pak_file.seek(0)
-    table_size = num_entries * ENTRY_SIZE
-    header = [
+    header_data = [
       HEADER_ID,
-      table_offset,
-      table_size
+      header.table_offset,
+      header.table_size
     ]
-    packed_header = header.pack(HEADER_TEMPLATE)
-    pak_write(pak_file, packed_header)
+    packed_header = header_data.pack(HEADER_TEMPLATE)
+    pak_write(packed_header, pak_file)
   end
 
-  def archive_table(pak_file, entries)
+  def archive_table(entries, pak_file)
     table_offset = pak_file.tell()
 
     entries.each do |entry|
@@ -686,7 +668,7 @@ class PAK
         entry.size
       ]
       packed_entry = entry_data.pack(ENTRY_TEMPLATE)
-      pak_write(pak_file, packed_entry)
+      pak_write(packed_entry, pak_file)
     end
 
     table_offset
@@ -710,7 +692,7 @@ class PAK
         size: File.size(path)
       )
 
-      archive_file(pak_file, entry)
+      archive_file(entry, pak_file)
       offset += entry.size
 
       print_create_entry(entry)
@@ -722,14 +704,14 @@ class PAK
     entries
   end
 
-  def archive_file(pak_file, entry)
+  def archive_file(entry, pak_file)
     File.open(entry.path, "rb") do |file|
       chunk_size = 1024 * 1024
 
       until file.eof?
         # read() does not read passed eof even when chunk_size > bytes_remaining
         bytes = file.read(chunk_size)
-        pak_write(pak_file, bytes)
+        pak_write(bytes, pak_file)
       end
     end
   end
@@ -859,9 +841,22 @@ class PAK
     FileUtils.mkdir_p(path)
   end
 
-  def pak_write(pak_file, data)
+  def pak_write(data, pak_file)
     return 0 if noop?
     pak_file.write(data)
+  end
+
+  def stream_entry(entry, pak_file, io)
+    pak_file.seek(entry.offset)
+    chunk_size = 1024 * 1024
+    bytes_remaining = entry.size
+
+    while (bytes_remaining > 0)
+      read_size = [chunk_size, bytes_remaining].min()
+      bytes = pak_file.read(read_size)
+      written_size = io.write(bytes)
+      bytes_remaining -= written_size
+    end
   end
 end
 
