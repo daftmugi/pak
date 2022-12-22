@@ -1,6 +1,6 @@
 #!/usr/bin/env -S ruby -w
 
-load File.expand_path("../../pak", __FILE__)
+load File.expand_path("../../bin/pak", __FILE__)
 TEST_PATH = File.expand_path("..", __FILE__)
 Dir.chdir(TEST_PATH)
 

@@ -26,6 +26,7 @@
 
 ## Installation
 
+* `pak` is in the `bin/` directory.
 * Use `pak` as is or copy it somewhere included in the `PATH`.
 * **NOTE:** `pak` can be renamed to something else if desired.
 
