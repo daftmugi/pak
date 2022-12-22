@@ -1,0 +1,871 @@
+#!/usr/bin/env ruby
+
+################################################################################
+# PAK.rb                                                                       #
+################################################################################
+#
+# PAK Packer/Unpacker for Quake.
+# https://github.com/daftmugi/pak
+
+################################################################################
+# PAK Archive Spec                                                             #
+################################################################################
+#
+# PAK Archive
+#     Header
+#     Entry Data
+#     Table
+#
+# Header
+#     char id[4]         // "PACK"
+#     int table_offset   // Offset to the entries table
+#     int table_size     // Size of the table
+#
+# Entry
+#     char path[56]      // Null-terminated path
+#     int offset         // Offset of the entry
+#     int size           // Size of the data
+
+################################################################################
+# MIT License                                                                  #
+################################################################################
+#
+# Copyright (c) 2022 Daft Mugi
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+if Gem::Version.new(RUBY_VERSION) < Gem::Version.new("3.0.0")
+  abort("Ruby 3.0+ is required")
+end
+
+require "fileutils"
+require "find"
+require "pathname"
+
+class PAK
+  VERSION = "1.0.0"
+
+  # 4-byte null-padded ASCII string, two 32-bit unsigned little-endian integers
+  HEADER_TEMPLATE = "a4V2"
+  # id(char[4]) + table_offset(4) + table_size(4)
+  HEADER_SIZE_BYTES = 12
+  HEADER_ID = "PACK"
+
+  # 56-byte null-padded ASCII string, two 32-bit unsigned little-endian integers
+  ENTRY_TEMPLATE = "a56V2"
+  # path(char[56]) + offset(4) + size(4)
+  ENTRY_SIZE = 64
+  ENTRY_PATH_LENGTH = 56
+
+  Header = Struct.new(:table_offset, :table_size, :num_entries, keyword_init: true)
+  Entry = Struct.new(:path, :offset, :size, keyword_init: true)
+
+  attr_reader :options
+
+  def self.main(args = ARGV)
+    debug_mode = args.include?("--debug")
+    self.new.run(args)
+  rescue => e
+    raise e if debug_mode
+    abort(e.message)
+  end
+
+  def initialize(opts = nil)
+    @options = default_options()
+    set_options(opts) if opts
+  end
+
+  def default_options
+    {
+      command: nil,
+      regex: nil,
+      ignore_paks: [],
+      pak_path: nil,
+      root_path: nil,
+
+      to_lower: false,
+      noop: false,
+      verbose: false,
+      very_verbose: false,
+    }
+  end
+
+  def set_options(opts)
+    @options.merge!(opts)
+  end
+
+  def to_lower?
+    @options[:to_lower]
+  end
+
+  def noop?
+    @options[:noop]
+  end
+
+  def verbose?
+    @options[:verbose] || @options[:very_verbose]
+  end
+
+  def very_verbose?
+    @options[:very_verbose]
+  end
+
+  def run(args)
+    # For "list" piped to "less", handle "Broken pipe <STDOUT> (Errno::EPIPE)"
+    Signal.trap("SIGPIPE", "SYSTEM_DEFAULT")
+
+    # For "Ctrl-c" at prompts
+    Signal.trap("SIGINT", "SYSTEM_DEFAULT")
+
+    set_options(process_args(args))
+
+    case options[:command]
+    when :list             then list_pak()
+    when :extract          then extract_pak()
+    when :pipe_extract     then pipe_extract_pak()
+    when :create           then create_pak()
+    when :find_duplicates  then find_duplicates()
+    else raise(usage)
+    end
+  end
+
+  def usage
+    cmd = File.basename($0)
+
+    <<~EOS
+    #{cmd} version #{VERSION}
+
+    Usage: #{cmd} -l PAK_FILE [REGEX]        [-L]      [-v | -vv]
+           #{cmd} -x PAK_FILE [REGEX] -d DIR [-L] [-n]
+           #{cmd} -p PAK_FILE [REGEX]        [-L]
+           #{cmd} -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
+           #{cmd} -D [EXCLUDE_PAKS]
+
+    Commands:
+        -l PAK_FILE   : list PAK archive files
+        -x PAK_FILE   : extract PAK archive
+        -p PAK_FILE   : extract PAK archive files to stdout (pipe)
+        -c PAK_FILE   : create PAK archive
+        -D            : read {pak0.pak,pak1.pak,...} and print duplicates
+        -D help       : print more details about -D usage
+        --help, -h    : print this message
+        --version     : print version
+
+    Options:
+        REGEX         : filter files by a regular expression
+        EXCLUDE_PAKS  : comma-separated pak set 'pak0,pak1,...' to exclude
+        -d DIR        : create from/extract to directory
+        -L            : convert filenames to lowercase
+        -n            : no-op, dry-run
+        -v            : verbose
+        -vv           : verbose with extra info (very verbose)
+        --debug       : print more detailed error messages
+    EOS
+  end
+
+  def ignore_paks_usage
+    cmd = File.basename($0)
+
+    <<~EOS
+    Usage: #{cmd} -D [EXCLUDE_PAKS]
+
+    -D
+        Finds duplicate file paths in pak archives, as Quake would load them.
+        This is useful for finding conflicting files.
+
+        Quake only reads pak files in sequential order. Given pak0.pak,
+        pak1.pak, and pak3.pak, Quake only reads pak0.pak and pak1.pak.
+        It skips pak3.pak, because there is no pak2.pak.
+
+
+    EXCLUDE_PAKS
+        Comma-separated set of paks to exclude, in the form 'pak0,pak1,...'.
+        The paks in the set do not need to include the '.pak' extension.
+
+        A duplicate file prints only if there is at least one pak not
+        included in the EXCLUDE_PAKS set.
+
+        Examples:
+          pak0.pak -> maps/a.bsp
+          pak1.pak -> maps/a.bsp
+          pak1.pak -> maps/b.bsp
+          pak2.pak -> maps/b.bsp
+          pak2.pak -> maps/c.bsp
+          pak3.pak -> maps/c.bsp
+
+          $ #{cmd} -D
+          maps/a.bsp: pak0.pak, pak1.pak
+          maps/b.bsp: pak1.pak, pak2.pak
+          maps/c.bsp: pak2.pak, pak3.pak
+
+          $ #{cmd} -D pak0
+          maps/a.bsp: pak0.pak, pak1.pak
+          maps/b.bsp: pak1.pak, pak2.pak
+          maps/c.bsp: pak2.pak, pak3.pak
+
+          $ #{cmd} -D pak0,pak1
+          maps/b.bsp: pak1.pak, pak2.pak
+          maps/c.bsp: pak2.pak, pak3.pak
+
+          $ #{cmd} -D pak1,pak2
+          maps/a.bsp: pak0.pak, pak1.pak
+          maps/c.bsp: pak2.pak, pak3.pak
+
+          $ #{cmd} -D pak0,pak1,pak2
+          maps/c.bsp: pak2.pak, pak3.pak
+
+          $ #{cmd} -D pak0,pak1,pak2,pak3
+          <no output>
+    EOS
+  end
+
+  def process_args(args)
+    opts = {}
+
+    if args.size < 1
+      raise(usage)
+    end
+
+    if args.include?("-h") || args.include?("--help")
+      puts(usage)
+      exit(0)
+    end
+
+    if args.include?("--version")
+      puts(VERSION)
+      exit(0)
+    end
+
+    if args.include?("-L")
+      opts[:to_lower] = true
+    end
+
+    if args.include?("-n")
+      opts[:noop] = true
+    end
+
+    if args.include?("-v")
+      opts[:verbose] = true
+    end
+
+    if args.include?("-vv")
+      opts[:very_verbose] = true
+    end
+
+    if index = args.find_index("-l")
+      raise(usage) if opts[:command]
+      opts[:command] = :list
+      raise(usage) unless opts[:pak_path] = args[index + 1]
+      opts[:regex] = maybe_regex(args[index + 2])
+    end
+
+    if index = args.find_index("-x")
+      raise(usage) if opts[:command]
+      opts[:command] = :extract
+      raise(usage) unless opts[:pak_path] = args[index + 1]
+      opts[:regex] = maybe_regex(args[index + 2])
+    end
+
+    if index = args.find_index("-p")
+      raise(usage) if opts[:command]
+      opts[:command] = :pipe_extract
+      raise(usage) unless opts[:pak_path] = args[index + 1]
+      opts[:regex] = maybe_regex(args[index + 2])
+    end
+
+    if index = args.find_index("-c")
+      raise(usage) if opts[:command]
+      opts[:command] = :create
+      raise(usage) unless opts[:pak_path] = args[index + 1]
+    end
+
+    if index = args.find_index("-D")
+      raise(usage) if opts[:command]
+      opts[:command] = :find_duplicates
+      if args[index + 1] == "help"
+        puts(ignore_paks_usage)
+        exit(0)
+      end
+      opts[:ignore_paks] = maybe_ignore_paks(args[index + 1])
+    end
+
+    if index = args.find_index("-d")
+      raise(usage) unless opts[:root_path] = args[index + 1]
+    end
+
+    opts
+  end
+
+  def maybe_regex(arg)
+    return nil if !arg || arg.start_with?("-")
+    Regexp.new(arg)
+  end
+
+  def maybe_ignore_paks(arg)
+    return [] if !arg || arg.start_with?("-")
+    arg.split(",").map { |pak| pak.end_with?(".pak") ? pak : "#{pak}.pak" }
+  end
+
+  def validate_options
+    raise("No command given") unless options[:command]
+    raise("No PAK file given") unless options[:pak_path]
+
+    root_path = options[:root_path]
+    if root_path
+      case options[:command]
+      when :list
+        raise("Cannot use '-d' with list")
+      when :pipe_extract
+        raise("Cannot use '-d' with pipe")
+      end
+    else
+      case options[:command]
+      when :extract
+        raise("Must use '-d' to specify the directory to extract the PAK to")
+      when :create
+        raise("Must use '-d' to specify the directory to create the PAK from")
+      end
+    end
+  end
+
+  ######################################################################
+  # READ PAK
+  ######################################################################
+
+  def open_pak(pak_path, &block)
+    pak_path_expanded = File.expand_path(pak_path)
+
+    raise("File not found: #{pak_path}") unless File.exist?(pak_path)
+    raise("Not a file: #{pak_path}")     unless File.file?(pak_path)
+
+    File.open(pak_path_expanded, "rb") do |pak_file|
+      id = pak_file.read(4) # "PACK"
+      raise("Not a PAK archive: #{pak_path}") if id != HEADER_ID
+      yield(pak_file)
+    end
+  end
+
+  def each_pak_entry(pak_file, &block)
+    header = read_header(pak_file)
+    table = extract_table(pak_file, header.table_offset, header.num_entries)
+
+    table.each do |entry|
+      yield(entry)
+    end
+  end
+
+  def read_header(pak_file)
+    pak_file.seek(4) # id(4)
+    table_offset = read_int(pak_file)
+    table_size = read_int(pak_file)
+    num_entries = table_size / ENTRY_SIZE
+
+    Header.new(
+      table_offset: table_offset,
+      table_size: table_size,
+      num_entries: num_entries
+    )
+  end
+
+  def read_path(file)
+    # null-terminated string
+    file.read(ENTRY_PATH_LENGTH).unpack("Z#{ENTRY_PATH_LENGTH}")[0]
+  end
+
+  def read_int(file)
+    # 32-bit unsigned little
+    file.read(4).unpack("V")[0]
+  end
+
+  def extract_table(pak_file, table_offset, num_files)
+    pak_file.seek(table_offset)
+
+    table = []
+
+    (0...num_files).each do |i|
+      path = read_path(pak_file)
+      path = path.downcase if to_lower?
+      offset = read_int(pak_file)
+      size = read_int(pak_file)
+
+      next if options[:regex] && !path.match?(options[:regex])
+
+      entry = Entry.new(
+        path: path,
+        offset: offset,
+        size: size
+      )
+
+      table << entry
+    end
+
+    table
+  end
+
+
+  ######################################################################
+  # LIST
+  ######################################################################
+
+  def list_pak
+    set_options(command: :list)
+    validate_options()
+
+    open_pak(options[:pak_path]) do |pak_file|
+      print_list_header()
+
+      total_size = 0
+      total_files = 0
+
+      each_pak_entry(pak_file) do |entry|
+        total_size += entry.size
+        total_files += 1
+        print_list_entry(entry, total_size, total_files)
+      end
+
+      print_list_footer(total_size, total_files)
+    end
+  end
+
+  def print_list_entry(entry, total_size, total_files)
+    if verbose?
+      entry_data = [entry.size]
+      entry_data << entry.offset if very_verbose?
+      entry_data << entry.path
+
+      fmt_str = very_verbose? ? "%10s  %10s  %s" : "%10s  %s"
+      puts(fmt_str % entry_data)
+    else
+      puts(entry.path)
+    end
+  end
+
+  def print_list_header
+    return unless verbose?
+    puts("Archive: #{options[:pak_path]}")
+
+    if very_verbose?
+      puts("   Size       Offset    Path")
+      puts("----------  ----------  -----------------------------------")
+    else
+      puts("   Size     Path")
+      puts("----------  -----------------------------------")
+    end
+  end
+
+  def print_list_footer(total_size, total_files)
+    return unless verbose?
+    files_string = total_files == 1 ? "file" : "files"
+
+    if very_verbose?
+      puts("----------              -----------------------------------")
+      puts("%10d              %d %s" % [total_size, total_files, files_string])
+    else
+      puts("----------  -----------------------------------")
+      puts("%10d  %d %s" % [total_size, total_files, files_string])
+    end
+  end
+
+
+  ######################################################################
+  # PIPE EXTRACT
+  ######################################################################
+
+  def pipe_extract_pak
+    set_options(command: :pipe_extract)
+    validate_options()
+
+    open_pak(options[:pak_path]) do |pak_file|
+      each_pak_entry(pak_file) do |entry|
+        pipe_entry(entry, pak_file)
+      end
+    end
+  end
+
+  def pipe_entry(entry, pak_file)
+    pak_file.seek(entry.offset)
+    chunk_size = 1024 * 1024
+    bytes_remaining = entry.size
+
+    while (bytes_remaining > 0)
+      read_size = [chunk_size, bytes_remaining].min()
+      bytes = pak_file.read(read_size)
+      written_size = $stdout.write(bytes)
+      bytes_remaining -= written_size
+    end
+  end
+
+
+  ######################################################################
+  # EXTRACT
+  ######################################################################
+
+  def extract_pak
+    set_options(command: :extract)
+    validate_options()
+
+    root_path = options[:root_path]
+    raise("Invalid target directory: ''") if root_path.empty?
+    raise("File exists: #{root_path}")    if File.file?(root_path)
+
+    open_pak(options[:pak_path]) do |pak_file|
+      entry_fmt_str = "%10s    %s"
+      handle_conflict_choice = :not_set
+
+      each_pak_entry(pak_file) do |entry|
+        write_path = File.join(root_path, entry.path)
+        parent_path = File.dirname(write_path)
+        file_in_path = get_closest_file_in_path(parent_path)
+
+        # NOTE
+        #   Warn that directory from archive cannot overwrite file on disk.
+        #   Warn that file from archive cannot overwrite directory on disk.
+        status =
+          if File.directory?(write_path)
+            :file_is_dir
+          elsif File.file?(write_path)
+            handle_conflict_choice = handle_conflict(entry.path, handle_conflict_choice)
+            case handle_conflict_choice
+            when :yes, :all
+              write_entry(pak_file, write_path, entry)
+              strings(:overwrite)
+            else
+              strings(:skip)
+            end
+          elsif file_in_path
+            :file_path_has_file
+          else
+            mkdir_p(parent_path)
+            write_entry(pak_file, write_path, entry)
+            strings(:extract)
+          end
+
+        case status
+        when :file_is_dir, :file_path_has_file
+          error_message_1 =
+            if status == :file_is_dir
+              "%s/ exists but is not a file" % [write_path]
+            else
+              "%s exists but is not a directory" % [file_in_path]
+            end
+          puts(entry_fmt_str % ["error", error_message_1])
+          error_message_2 = "-> skipping %s" % [entry.path]
+          puts(entry_fmt_str % ["", error_message_2])
+        else
+          puts(entry_fmt_str % [status, entry.path])
+        end
+      end
+    end
+  end
+
+  def get_closest_file_in_path(path)
+    return nil   if File.directory?(path)
+    return path  if File.file?(path)
+
+    parent = File.dirname(path)
+    get_closest_file_in_path(parent)
+  end
+
+  def write_entry(pak_file, write_path, entry)
+    return if noop?
+    pak_file.seek(entry.offset)
+    file = File.open(write_path, "wb")
+    chunk_size = 1024 * 1024
+    bytes_remaining = entry.size
+
+    while (bytes_remaining > 0)
+      read_size = [chunk_size, bytes_remaining].min()
+      bytes = pak_file.read(read_size)
+      written_size = file.write(bytes)
+      bytes_remaining -= written_size
+    end
+
+    file.close()
+  end
+
+  def handle_conflict(path, previous_conflict_choice)
+    choice = :invalid
+    conflict_choice =
+      case previous_conflict_choice
+      when :all, :none
+        previous_conflict_choice
+      else
+        choice = prompt_user_about_conflict(path) while choice == :invalid
+        choice
+      end
+
+    conflict_choice
+  end
+
+  def prompt_user_about_conflict(path)
+    $stderr.print("replace? #{path} [y]es, [n]o, [A]ll, [N]one: ")
+    choice = $stdin.readline().strip()
+
+    case choice
+    when "y" then :yes
+    when "n" then :no
+    when "A" then :all
+    when "N" then :none
+    else :invalid
+    end
+  end
+
+
+  ######################################################################
+  # CREATE
+  ######################################################################
+
+  def create_pak
+    set_options(command: :create)
+    validate_options()
+
+    pak_path = options[:pak_path]
+    pak_path_expanded = File.expand_path(pak_path)
+    root_path = options[:root_path]
+
+    raise("Invalid source directory: ''")          if root_path.empty?
+    raise("File already exists: #{pak_path}")      if File.exist?(pak_path)
+    raise("Not a directory: #{root_path}")         if File.file?(root_path)
+    raise("Directory not found: #{root_path}") unless File.directory?(root_path)
+
+    Dir.chdir(options[:root_path]) do
+      new_pak_file(pak_path_expanded) do |pak_file|
+        entries = archive_files(pak_file)
+        table_offset = archive_table(pak_file, entries)
+        archive_header(pak_file, table_offset, entries.size)
+      end
+    end
+  end
+
+  def new_pak_file(path, &block)
+    if noop?
+      require "stringio"
+      StringIO.open("", "wb", &block)
+    else
+      File.open(path, "wb", &block)
+    end
+  end
+
+  def archive_header(pak_file, table_offset, num_entries)
+    pak_file.seek(0)
+    table_size = num_entries * ENTRY_SIZE
+    header = [
+      HEADER_ID,
+      table_offset,
+      table_size
+    ]
+    packed_header = header.pack(HEADER_TEMPLATE)
+    pak_write(pak_file, packed_header)
+  end
+
+  def archive_table(pak_file, entries)
+    table_offset = pak_file.tell()
+
+    entries.each do |entry|
+      entry_path = to_lower? ? entry.path.downcase() : entry.path
+
+      entry_data = [
+        entry_path.encode("ascii"),
+        entry.offset,
+        entry.size
+      ]
+      packed_entry = entry_data.pack(ENTRY_TEMPLATE)
+      pak_write(pak_file, packed_entry)
+    end
+
+    table_offset
+  end
+
+  def archive_files(pak_file)
+    pak_file.seek(HEADER_SIZE_BYTES)
+    offset = pak_file.tell()
+    entries = []
+
+    print_create_header()
+
+    Find.find(".") do |path|
+      next if File.directory?(path)
+      file_path = Pathname.new(path).relative_path_from(".").to_s
+      file_path = clean_path(file_path)
+
+      entry = Entry.new(
+        path: file_path,
+        offset: offset,
+        size: File.size(path)
+      )
+
+      archive_file(pak_file, entry)
+      offset += entry.size
+
+      print_create_entry(entry)
+      entries << entry
+    end
+
+    print_create_footer(entries)
+
+    entries
+  end
+
+  def archive_file(pak_file, entry)
+    File.open(entry.path, "rb") do |file|
+      chunk_size = 1024 * 1024
+
+      until file.eof?
+        # read() does not read passed eof even when chunk_size > bytes_remaining
+        bytes = file.read(chunk_size)
+        pak_write(pak_file, bytes)
+      end
+    end
+  end
+
+  def clean_path(path)
+    max_length = ENTRY_PATH_LENGTH - 1 # minus null terminator
+
+    if path.length > max_length
+      raise("Path more than #{max_length} characters: #{path}")
+    end
+
+    begin
+      path.encode("ascii")
+    rescue
+      raise("Path not ASCII compatible: #{path}")
+    end
+  end
+
+  def print_create_entry(entry)
+    action = :archive
+    entry_path = to_lower? ? entry.path.downcase() : entry.path
+
+    if verbose?
+      entry_data = [strings(action)]
+      entry_data << entry.size
+      entry_data << entry.offset if very_verbose?
+      entry_data << entry_path
+
+      fmt_str = very_verbose? ? "%-8s  %10s  %10s  %s" : "%-8s  %10s  %s"
+    else
+      fmt_str = "%8s  %s"
+      entry_data = [
+        strings(action),
+        entry_path,
+      ]
+    end
+
+    puts(fmt_str % entry_data)
+  end
+
+  def print_create_header
+    return unless verbose?
+
+    if very_verbose?
+      puts(" Action      Size       Offset    Path")
+      puts("--------  ----------  ----------  -----------------------------------")
+    else
+      puts(" Action      Size     Path")
+      puts("--------  ----------  -----------------------------------")
+    end
+  end
+
+  def print_create_footer(entries)
+    return unless verbose?
+    total_size = entries.sum { |e| e.size }
+    total_files = entries.size
+    files_string = total_files == 1 ? "file" : "files"
+
+    if very_verbose?
+      puts("--------  ----------  ----------  -----------------------------------")
+      fmt_str = "          %10d              %d %s"
+    else
+      puts("--------  ----------  -----------------------------------")
+      fmt_str = "          %10d  %d %s"
+    end
+
+    puts(fmt_str % [total_size, total_files, files_string])
+  end
+
+
+  ######################################################################
+  # FIND DUPLICATES
+  ######################################################################
+
+  def find_duplicates
+    set_options(command: :find_duplicates)
+    pak_paths = []
+
+    i = 0; loop do
+      pak = "pak#{i}.pak"
+      break unless File.exist?(pak)
+      pak_paths << pak
+      i += 1
+    end
+
+    if pak_paths.size == 0
+      puts("No pak files found")
+      return
+    end
+
+    entries_hash = Hash.new
+    pak_paths.each do |pak_path|
+      open_pak(pak_path) do |pak_file|
+        each_pak_entry(pak_file) do |entry|
+          entry_path = entry.path.downcase
+          entries_hash[entry_path] ||= []
+          entries_hash[entry_path] << pak_path
+        end
+      end
+    end
+
+    entries_hash.each do |path, pak_list|
+      next unless pak_list.size > 1
+      next unless (pak_list - options[:ignore_paks]).size > 0
+      printf("%s: %s\n", path, pak_list.join(", "))
+    end
+  end
+
+
+  ######################################################################
+  # HELPERS
+  ######################################################################
+
+  def strings(key)
+    case key
+    when :skip      then noop? ? "skip"      : "skipped"
+    when :overwrite then noop? ? "overwrite" : "overwrote"
+    when :create    then noop? ? "create"    : "created"
+    when :extract   then noop? ? "extract"   : "extracted"
+    when :archive   then noop? ? "archive"   : "archived"
+    end
+  end
+
+  def mkdir_p(path)
+    return if noop?
+    return if File.directory?(path)
+    FileUtils.mkdir_p(path)
+  end
+
+  def pak_write(pak_file, data)
+    return 0 if noop?
+    pak_file.write(data)
+  end
+end
+
+if $0 == __FILE__
+  PAK.main()
+end
+
