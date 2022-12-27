@@ -199,7 +199,8 @@ class PAK
 
         Quake only reads pak files in sequential order. Given pak0.pak,
         pak1.pak, and pak3.pak, Quake only reads pak0.pak and pak1.pak.
-        It skips pak3.pak, because there is no pak2.pak.
+        It skips pak3.pak, because there is no pak2.pak. The files in
+        the last loaded pak have priority over earlier loaded paks.
 
 
     -m REGEX
@@ -226,25 +227,25 @@ class PAK
           pak3.pak -> maps/c.bsp
 
           $ #{cmd} -D
-          maps/a.bsp: pak0.pak, pak1.pak
-          maps/b.bsp: pak1.pak, pak2.pak
-          maps/c.bsp: pak2.pak, pak3.pak
+          maps/c.bsp: pak3.pak, pak2.pak
+          maps/b.bsp: pak2.pak, pak1.pak
+          maps/a.bsp: pak1.pak, pak0.pak
 
           $ #{cmd} -D -e pak0
-          maps/a.bsp: pak0.pak, pak1.pak
-          maps/b.bsp: pak1.pak, pak2.pak
-          maps/c.bsp: pak2.pak, pak3.pak
+          maps/c.bsp: pak3.pak, pak2.pak
+          maps/b.bsp: pak2.pak, pak1.pak
+          maps/a.bsp: pak1.pak, pak0.pak
 
           $ #{cmd} -D -e pak0,pak1
-          maps/b.bsp: pak1.pak, pak2.pak
-          maps/c.bsp: pak2.pak, pak3.pak
+          maps/c.bsp: pak3.pak, pak2.pak
+          maps/b.bsp: pak2.pak, pak1.pak
 
           $ #{cmd} -D -e pak1,pak2
-          maps/a.bsp: pak0.pak, pak1.pak
-          maps/c.bsp: pak2.pak, pak3.pak
+          maps/c.bsp: pak3.pak, pak2.pak
+          maps/a.bsp: pak1.pak, pak0.pak
 
           $ #{cmd} -D -e pak0,pak1,pak2
-          maps/c.bsp: pak2.pak, pak3.pak
+          maps/c.bsp: pak3.pak, pak2.pak
 
           $ #{cmd} -D -e pak0,pak1,pak2,pak3
           <no output>
@@ -788,8 +789,11 @@ class PAK
       return
     end
 
+    # Last pak has load priority
+    paths_by_priority = pak_paths.reverse()
+
     entries_hash = Hash.new
-    pak_paths.each do |pak_path|
+    paths_by_priority.each do |pak_path|
       open_pak(pak_path) do |pak_file|
         each_pak_entry(pak_file) do |entry|
           entries_hash[entry.path] ||= []

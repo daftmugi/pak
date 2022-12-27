@@ -72,7 +72,8 @@ Usage: pak -D [-m REGEX] [-e EXCLUDE_PAKS]
 
     Quake only reads pak files in sequential order. Given pak0.pak,
     pak1.pak, and pak3.pak, Quake only reads pak0.pak and pak1.pak.
-    It skips pak3.pak, because there is no pak2.pak.
+    It skips pak3.pak, because there is no pak2.pak. The files in
+    the last loaded pak have priority over earlier loaded paks.
 
 
 -m REGEX
@@ -99,25 +100,25 @@ Usage: pak -D [-m REGEX] [-e EXCLUDE_PAKS]
       pak3.pak -> maps/c.bsp
 
       $ pak -D
-      maps/a.bsp: pak0.pak, pak1.pak
-      maps/b.bsp: pak1.pak, pak2.pak
-      maps/c.bsp: pak2.pak, pak3.pak
+      maps/c.bsp: pak3.pak, pak2.pak
+      maps/b.bsp: pak2.pak, pak1.pak
+      maps/a.bsp: pak1.pak, pak0.pak
 
       $ pak -D -e pak0
-      maps/a.bsp: pak0.pak, pak1.pak
-      maps/b.bsp: pak1.pak, pak2.pak
-      maps/c.bsp: pak2.pak, pak3.pak
+      maps/c.bsp: pak3.pak, pak2.pak
+      maps/b.bsp: pak2.pak, pak1.pak
+      maps/a.bsp: pak1.pak, pak0.pak
 
       $ pak -D -e pak0,pak1
-      maps/b.bsp: pak1.pak, pak2.pak
-      maps/c.bsp: pak2.pak, pak3.pak
+      maps/c.bsp: pak3.pak, pak2.pak
+      maps/b.bsp: pak2.pak, pak1.pak
 
       $ pak -D -e pak1,pak2
-      maps/a.bsp: pak0.pak, pak1.pak
-      maps/c.bsp: pak2.pak, pak3.pak
+      maps/c.bsp: pak3.pak, pak2.pak
+      maps/a.bsp: pak1.pak, pak0.pak
 
       $ pak -D -e pak0,pak1,pak2
-      maps/c.bsp: pak2.pak, pak3.pak
+      maps/c.bsp: pak3.pak, pak2.pak
 
       $ pak -D -e pak0,pak1,pak2,pak3
       <no output>

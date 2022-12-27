@@ -144,9 +144,9 @@ class PAKTest < Minitest::Test
     pak = PAK.new
 
     expected = <<~EOS
-    maps/a.bsp: pak0.pak, pak1.pak
-    maps/b.bsp: pak1.pak, pak2.pak
-    maps/c.bsp: pak2.pak, pak3.pak
+    maps/c.bsp: pak3.pak, pak2.pak
+    maps/b.bsp: pak2.pak, pak1.pak
+    maps/a.bsp: pak1.pak, pak0.pak
     EOS
 
     Dir.chdir("test_data/dups") do
@@ -158,8 +158,8 @@ class PAKTest < Minitest::Test
     pak = PAK.new(exclude_paks: ["pak1.pak", "pak2.pak"])
 
     expected = <<~EOS
-    maps/a.bsp: pak0.pak, pak1.pak
-    maps/c.bsp: pak2.pak, pak3.pak
+    maps/c.bsp: pak3.pak, pak2.pak
+    maps/a.bsp: pak1.pak, pak0.pak
     EOS
 
     Dir.chdir("test_data/dups") do
