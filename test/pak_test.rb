@@ -154,8 +154,8 @@ class PAKTest < Minitest::Test
     end
   end
 
-  def test_find_duplicates_given_ignore
-    pak = PAK.new(ignore_paks: ["pak1.pak", "pak2.pak"])
+  def test_find_duplicates_given_exclude
+    pak = PAK.new(exclude_paks: ["pak1.pak", "pak2.pak"])
 
     expected = <<~EOS
     maps/a.bsp: pak0.pak, pak1.pak

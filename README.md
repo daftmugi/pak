@@ -34,41 +34,40 @@
 ## Usage
 
 ```
-Usage: pak -l PAK_FILE [REGEX]        [-L]      [-v | -vv]
-       pak -x PAK_FILE [REGEX] -d DIR [-L] [-n]
-       pak -p PAK_FILE [REGEX]        [-L]
+Usage: pak -l PAK_FILE [-m REGEX]        [-L]      [-v | -vv]
+       pak -x PAK_FILE [-m REGEX] -d DIR [-L] [-n]
+       pak -p PAK_FILE [-m REGEX]        [-L]
        pak -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
-       pak -D [EXCLUDE_PAKS]
+       pak -D          [-m REGEX] [-e EXCLUDE_PAKS]
 
 Commands:
-    -l PAK_FILE   : list PAK archive files
-    -x PAK_FILE   : extract PAK archive
-    -p PAK_FILE   : extract PAK archive files to stdout (pipe)
-    -c PAK_FILE   : create PAK archive
-    -D            : read {pak0.pak,pak1.pak,...} and print duplicates
-    -D help       : print more details about -D usage
-    --help, -h    : print this message
-    --version     : print version
+    -l PAK_FILE    : list PAK archive files
+    -x PAK_FILE    : extract PAK archive
+    -p PAK_FILE    : extract PAK archive files to stdout (pipe)
+    -c PAK_FILE    : create PAK archive
+    -D             : read {pak0.pak,pak1.pak,...} and print duplicates
+    -D help        : print more details about -D usage
+    --help, -h     : print this message
+    --version      : print version
 
 Options:
-    REGEX         : filter files by a regular expression
-    EXCLUDE_PAKS  : comma-separated pak set 'pak0,pak1,...' to exclude
-    -d DIR        : create from/extract to directory
-    -L            : convert filenames to lowercase
-    -n            : no-op, dry-run
-    -v            : verbose
-    -vv           : verbose with extra info (very verbose)
-    --debug       : print more detailed error messages
+    -m REGEX       : match file paths by a regular expression
+    -d DIR         : create from/extract to directory
+    -L             : convert filenames to lowercase
+    -n             : no-op, dry-run
+    -v             : verbose
+    -vv            : verbose with extra info (very verbose)
+    --debug        : more detailed error messages
 ```
 
 
 ## Usage: Find Duplicates
 
 ```
-Usage: pak -D [EXCLUDE_PAKS]
+Usage: pak -D [-m REGEX] [-e EXCLUDE_PAKS]
 
 -D
-    Finds duplicate file paths in pak archives, as Quake would load them.
+    Find duplicate file paths in pak archives, as Quake would load them.
     This is useful for finding conflicting files.
 
     Quake only reads pak files in sequential order. Given pak0.pak,
@@ -76,7 +75,15 @@ Usage: pak -D [EXCLUDE_PAKS]
     It skips pak3.pak, because there is no pak2.pak.
 
 
-EXCLUDE_PAKS
+-m REGEX
+    Match file paths by a regular expression
+    For example:
+        "-m 'bsp'" -> match names that include 'dds'
+        "-m '.bsp$'" -> match names that end with '.dds'
+        "-m 'maps/.*'" -> match path 'maps'
+
+
+-e EXCLUDE_PAKS
     Comma-separated set of paks to exclude, in the form 'pak0,pak1,...'.
     The paks in the set do not need to include the '.pak' extension.
 
@@ -96,22 +103,22 @@ EXCLUDE_PAKS
       maps/b.bsp: pak1.pak, pak2.pak
       maps/c.bsp: pak2.pak, pak3.pak
 
-      $ pak -D pak0
+      $ pak -D -e pak0
       maps/a.bsp: pak0.pak, pak1.pak
       maps/b.bsp: pak1.pak, pak2.pak
       maps/c.bsp: pak2.pak, pak3.pak
 
-      $ pak -D pak0,pak1
+      $ pak -D -e pak0,pak1
       maps/b.bsp: pak1.pak, pak2.pak
       maps/c.bsp: pak2.pak, pak3.pak
 
-      $ pak -D pak1,pak2
+      $ pak -D -e pak1,pak2
       maps/a.bsp: pak0.pak, pak1.pak
       maps/c.bsp: pak2.pak, pak3.pak
 
-      $ pak -D pak0,pak1,pak2
+      $ pak -D -e pak0,pak1,pak2
       maps/c.bsp: pak2.pak, pak3.pak
 
-      $ pak -D pak0,pak1,pak2,pak3
+      $ pak -D -e pak0,pak1,pak2,pak3
       <no output>
 ```

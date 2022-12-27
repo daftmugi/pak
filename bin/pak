@@ -102,7 +102,6 @@ class PAK
     {
       command: nil,
       regex: nil,
-      ignore_paks: [],
       pak_path: nil,
       root_path: nil,
 
@@ -110,6 +109,9 @@ class PAK
       noop: false,
       verbose: false,
       very_verbose: false,
+
+      # find duplicates
+      exclude_paks: [],
     }
   end
 
@@ -118,7 +120,7 @@ class PAK
   end
 
   def to_lower?
-    @options[:to_lower]
+    @options[:to_lower] || @options[:command] == :find_duplicates
   end
 
   def noop?
@@ -158,42 +160,41 @@ class PAK
     <<~EOS
     #{cmd} version #{VERSION}
 
-    Usage: #{cmd} -l PAK_FILE [REGEX]        [-L]      [-v | -vv]
-           #{cmd} -x PAK_FILE [REGEX] -d DIR [-L] [-n]
-           #{cmd} -p PAK_FILE [REGEX]        [-L]
+    Usage: #{cmd} -l PAK_FILE [-m REGEX]        [-L]      [-v | -vv]
+           #{cmd} -x PAK_FILE [-m REGEX] -d DIR [-L] [-n]
+           #{cmd} -p PAK_FILE [-m REGEX]        [-L]
            #{cmd} -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
-           #{cmd} -D [EXCLUDE_PAKS]
+           #{cmd} -D          [-m REGEX] [-e EXCLUDE_PAKS]
 
     Commands:
-        -l PAK_FILE   : list PAK archive files
-        -x PAK_FILE   : extract PAK archive
-        -p PAK_FILE   : extract PAK archive files to stdout (pipe)
-        -c PAK_FILE   : create PAK archive
-        -D            : read {pak0.pak,pak1.pak,...} and print duplicates
-        -D help       : print more details about -D usage
-        --help, -h    : print this message
-        --version     : print version
+        -l PAK_FILE    : list PAK archive files
+        -x PAK_FILE    : extract PAK archive
+        -p PAK_FILE    : extract PAK archive files to stdout (pipe)
+        -c PAK_FILE    : create PAK archive
+        -D             : read {pak0.pak,pak1.pak,...} and print duplicates
+        -D help        : print more details about -D usage
+        --help, -h     : print this message
+        --version      : print version
 
     Options:
-        REGEX         : filter files by a regular expression
-        EXCLUDE_PAKS  : comma-separated pak set 'pak0,pak1,...' to exclude
-        -d DIR        : create from/extract to directory
-        -L            : convert filenames to lowercase
-        -n            : no-op, dry-run
-        -v            : verbose
-        -vv           : verbose with extra info (very verbose)
-        --debug       : print more detailed error messages
+        -m REGEX       : match file paths by a regular expression
+        -d DIR         : create from/extract to directory
+        -L             : convert filenames to lowercase
+        -n             : no-op, dry-run
+        -v             : verbose
+        -vv            : verbose with extra info (very verbose)
+        --debug        : more detailed error messages
     EOS
   end
 
-  def ignore_paks_usage
+  def find_duplicates_usage
     cmd = File.basename($0)
 
     <<~EOS
-    Usage: #{cmd} -D [EXCLUDE_PAKS]
+    Usage: #{cmd} -D [-m REGEX] [-e EXCLUDE_PAKS]
 
     -D
-        Finds duplicate file paths in pak archives, as Quake would load them.
+        Find duplicate file paths in pak archives, as Quake would load them.
         This is useful for finding conflicting files.
 
         Quake only reads pak files in sequential order. Given pak0.pak,
@@ -201,7 +202,15 @@ class PAK
         It skips pak3.pak, because there is no pak2.pak.
 
 
-    EXCLUDE_PAKS
+    -m REGEX
+        Match file paths by a regular expression
+        For example:
+            "-m 'bsp'" -> match names that include 'dds'
+            "-m '\.bsp$'" -> match names that end with '.dds'
+            "-m 'maps/.*'" -> match path 'maps'
+
+
+    -e EXCLUDE_PAKS
         Comma-separated set of paks to exclude, in the form 'pak0,pak1,...'.
         The paks in the set do not need to include the '.pak' extension.
 
@@ -221,99 +230,76 @@ class PAK
           maps/b.bsp: pak1.pak, pak2.pak
           maps/c.bsp: pak2.pak, pak3.pak
 
-          $ #{cmd} -D pak0
+          $ #{cmd} -D -e pak0
           maps/a.bsp: pak0.pak, pak1.pak
           maps/b.bsp: pak1.pak, pak2.pak
           maps/c.bsp: pak2.pak, pak3.pak
 
-          $ #{cmd} -D pak0,pak1
+          $ #{cmd} -D -e pak0,pak1
           maps/b.bsp: pak1.pak, pak2.pak
           maps/c.bsp: pak2.pak, pak3.pak
 
-          $ #{cmd} -D pak1,pak2
+          $ #{cmd} -D -e pak1,pak2
           maps/a.bsp: pak0.pak, pak1.pak
           maps/c.bsp: pak2.pak, pak3.pak
 
-          $ #{cmd} -D pak0,pak1,pak2
+          $ #{cmd} -D -e pak0,pak1,pak2
           maps/c.bsp: pak2.pak, pak3.pak
 
-          $ #{cmd} -D pak0,pak1,pak2,pak3
+          $ #{cmd} -D -e pak0,pak1,pak2,pak3
           <no output>
     EOS
   end
 
   def process_args(args)
     opts = {}
-
-    if args.size < 1
-      raise(usage)
-    end
+    raise(usage) if args.size < 1
 
     if args.include?("-h") || args.include?("--help")
       puts(usage)
       exit(0)
     end
-
     if args.include?("--version")
       puts(VERSION)
       exit(0)
     end
 
-    if args.include?("-L")
-      opts[:to_lower] = true
+    opts[:to_lower]            = args.include?("-L")
+    opts[:noop]                = args.include?("-n")
+    opts[:verbose]             = args.include?("-v")
+    opts[:very_verbose]        = args.include?("-vv")
+
+    if index = args.find_index("-m")
+      opts[:regex] = maybe_regex(args[index + 1])
+    end
+    if index = args.find_index("-e")
+      opts[:exclude_paks] = maybe_exclude_paks(args[index + 1])
+    end
+    if index = args.find_index("-d")
+      raise(usage) unless opts[:root_path] = args[index + 1]
     end
 
-    if args.include?("-n")
-      opts[:noop] = true
-    end
-
-    if args.include?("-v")
-      opts[:verbose] = true
-    end
-
-    if args.include?("-vv")
-      opts[:very_verbose] = true
-    end
-
-    if index = args.find_index("-l")
-      raise(usage) if opts[:command]
-      opts[:command] = :list
-      raise(usage) unless opts[:pak_path] = args[index + 1]
-      opts[:regex] = maybe_regex(args[index + 2])
-    end
-
-    if index = args.find_index("-x")
-      raise(usage) if opts[:command]
-      opts[:command] = :extract
-      raise(usage) unless opts[:pak_path] = args[index + 1]
-      opts[:regex] = maybe_regex(args[index + 2])
-    end
-
-    if index = args.find_index("-p")
-      raise(usage) if opts[:command]
-      opts[:command] = :pipe_extract
-      raise(usage) unless opts[:pak_path] = args[index + 1]
-      opts[:regex] = maybe_regex(args[index + 2])
-    end
-
-    if index = args.find_index("-c")
-      raise(usage) if opts[:command]
-      opts[:command] = :create
-      raise(usage) unless opts[:pak_path] = args[index + 1]
+    ["-l", "-x", "-p", "-c"].each do |cmd|
+      if index = args.find_index(cmd)
+        raise(usage) if opts[:command]
+        opts[:command] =
+          case cmd
+          when "-l" then :list
+          when "-x" then :extract
+          when "-p" then :pipe_extract
+          when "-c" then :create
+          end
+        raise(usage) unless opts[:pak_path] = args[index + 1]
+      end
     end
 
     if index = args.find_index("-D")
       raise(usage) if opts[:command]
       opts[:command] = :find_duplicates
       if args[index + 1] == "help"
-        puts(ignore_paks_usage)
+        puts(find_duplicates_usage)
         exit(0)
       end
-      opts[:ignore_paks] = maybe_ignore_paks(args[index + 1])
-    end
-
-    if index = args.find_index("-d")
-      raise(usage) unless opts[:root_path] = args[index + 1]
     end
 
     opts
@@ -324,7 +310,7 @@ class PAK
     Regexp.new(arg)
   end
 
-  def maybe_ignore_paks(arg)
+  def maybe_exclude_paks(arg)
     return [] if !arg || arg.start_with?("-")
     arg.split(",").map { |pak| pak.end_with?(".pak") ? pak : "#{pak}.pak" }
   end
@@ -806,16 +792,15 @@ class PAK
     pak_paths.each do |pak_path|
       open_pak(pak_path) do |pak_file|
         each_pak_entry(pak_file) do |entry|
-          entry_path = entry.path.downcase
-          entries_hash[entry_path] ||= []
-          entries_hash[entry_path] << pak_path
+          entries_hash[entry.path] ||= []
+          entries_hash[entry.path] << pak_path
         end
       end
     end
 
     entries_hash.each do |path, pak_list|
       next unless pak_list.size > 1
-      next unless (pak_list - options[:ignore_paks]).size > 0
+      next unless (pak_list - options[:exclude_paks]).size > 0
       printf("%s: %s\n", path, pak_list.join(", "))
     end
   end
@@ -854,8 +839,8 @@ class PAK
     while (bytes_remaining > 0)
       read_size = [chunk_size, bytes_remaining].min()
       bytes = pak_file.read(read_size)
-      written_size = io.write(bytes)
-      bytes_remaining -= written_size
+      io.write(bytes)
+      bytes_remaining -= read_size
     end
   end
 end
