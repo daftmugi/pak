@@ -38,7 +38,7 @@ Usage: pak -l PAK_FILE [-m REGEX]        [-L]      [-v | -vv]
        pak -x PAK_FILE [-m REGEX] -d DIR [-L] [-n]
        pak -p PAK_FILE [-m REGEX]        [-L]
        pak -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
-       pak -D          [-m REGEX] [-e EXCLUDE_PAKS]
+       pak -D [PATHS]  [-m REGEX] [-e EXCLUDE_PAKS]
 
 Commands:
     -l PAK_FILE    : list PAK archive files
@@ -64,9 +64,9 @@ Options:
 ## Usage: Find Duplicates
 
 ```
-Usage: pak -D [-m REGEX] [-e EXCLUDE_PAKS]
+Usage: pak -D [PATHS] [-m REGEX] [-e EXCLUDE_PAKS]
 
--D
+-D [PATHS]
     Find duplicate file paths in pak archives, as Quake would load them.
     This is useful for finding conflicting files.
 
@@ -74,6 +74,17 @@ Usage: pak -D [-m REGEX] [-e EXCLUDE_PAKS]
     pak1.pak, and pak3.pak, Quake only reads pak0.pak and pak1.pak.
     It skips pak3.pak, because there is no pak2.pak. The files in
     the last loaded pak have priority over earlier loaded paks.
+
+    PATHS
+        Comma-separated list of paths to search for '.pak' files.
+        When PATHS is omitted, the current directory is searched for '.pak' files.
+        The load priority of the list is highest (left) to lowest (right).
+        For example:
+            "-D" -> search current directory './'
+            "-D mod1" -> from current directory, search './mod1'
+            "-D mod1,mod2,mod3" -> search './mod1', './mod2', './mod3'
+            "-D mod1,mod2,." -> search './mod1', './mod2', './'
+              NOTE: './' is the current directory.
 
 
 -m REGEX

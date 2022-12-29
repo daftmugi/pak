@@ -166,4 +166,32 @@ class PAKTest < Minitest::Test
       assert_output(expected, "") { pak.find_duplicates() }
     end
   end
+
+  def test_find_duplicates_given_multiple_paths
+    pak = PAK.new(paths: ["dups2", "dups"])
+
+    expected = <<~EOS
+    maps/c.bsp: dups2/pak1.pak, dups/pak3.pak, dups/pak2.pak
+    maps/a.bsp: dups2/pak0.pak, dups/pak1.pak, dups/pak0.pak
+    maps/b.bsp: dups/pak2.pak, dups/pak1.pak
+    EOS
+
+    Dir.chdir("test_data") do
+      assert_output(expected, "") { pak.find_duplicates() }
+    end
+  end
+
+  def test_find_duplicates_given_multiple_paths_including_pwd
+    pak = PAK.new(paths: [".", "../dups"])
+
+    expected = <<~EOS
+    maps/c.bsp: pak1.pak, ../dups/pak3.pak, ../dups/pak2.pak
+    maps/a.bsp: pak0.pak, ../dups/pak1.pak, ../dups/pak0.pak
+    maps/b.bsp: ../dups/pak2.pak, ../dups/pak1.pak
+    EOS
+
+    Dir.chdir("test_data/dups2") do
+      assert_output(expected, "") { pak.find_duplicates() }
+    end
+  end
 end

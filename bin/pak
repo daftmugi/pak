@@ -111,6 +111,7 @@ class PAK
       very_verbose: false,
 
       # find duplicates
+      paths: nil,
       exclude_paks: [],
     }
   end
@@ -164,7 +165,7 @@ class PAK
            #{cmd} -x PAK_FILE [-m REGEX] -d DIR [-L] [-n]
            #{cmd} -p PAK_FILE [-m REGEX]        [-L]
            #{cmd} -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
-           #{cmd} -D          [-m REGEX] [-e EXCLUDE_PAKS]
+           #{cmd} -D [PATHS]  [-m REGEX] [-e EXCLUDE_PAKS]
 
     Commands:
         -l PAK_FILE    : list PAK archive files
@@ -191,9 +192,9 @@ class PAK
     cmd = File.basename($0)
 
     <<~EOS
-    Usage: #{cmd} -D [-m REGEX] [-e EXCLUDE_PAKS]
+    Usage: #{cmd} -D [PATHS] [-m REGEX] [-e EXCLUDE_PAKS]
 
-    -D
+    -D [PATHS]
         Find duplicate file paths in pak archives, as Quake would load them.
         This is useful for finding conflicting files.
 
@@ -201,6 +202,17 @@ class PAK
         pak1.pak, and pak3.pak, Quake only reads pak0.pak and pak1.pak.
         It skips pak3.pak, because there is no pak2.pak. The files in
         the last loaded pak have priority over earlier loaded paks.
+
+        PATHS
+            Comma-separated list of paths to search for '.pak' files.
+            When PATHS is omitted, the current directory is searched for '.pak' files.
+            The load priority of the list is highest (left) to lowest (right).
+            For example:
+                "-D" -> search current directory './'
+                "-D mod1" -> from current directory, search './mod1'
+                "-D mod1,mod2,mod3" -> search './mod1', './mod2', './mod3'
+                "-D mod1,mod2,." -> search './mod1', './mod2', './'
+                  NOTE: './' is the current directory.
 
 
     -m REGEX
@@ -301,6 +313,7 @@ class PAK
         puts(find_duplicates_usage)
         exit(0)
       end
+      opts[:paths] = maybe_paths(args[index + 1])
     end
 
     opts
@@ -314,6 +327,11 @@ class PAK
   def maybe_exclude_paks(arg)
     return [] if !arg || arg.start_with?("-")
     arg.split(",").map { |pak| pak.end_with?(".pak") ? pak : "#{pak}.pak" }
+  end
+
+  def maybe_paths(arg)
+    return nil if !arg || arg.start_with?("-")
+    arg.split(",")
   end
 
   def validate_options
@@ -775,25 +793,33 @@ class PAK
 
   def find_duplicates
     set_options(command: :find_duplicates)
-    pak_paths = []
+    options[:paths] ||= [Dir.pwd]  # pwd as default
+    paks_by_priority = []
 
-    i = 0; loop do
-      pak = "pak#{i}.pak"
-      break unless File.exist?(pak)
-      pak_paths << pak
-      i += 1
+    options[:paths].each do |path|
+      pak_paths = []
+      i = 0; loop do
+        pak_path =
+          if File.expand_path(path) == Dir.pwd
+            "pak#{i}.pak"
+          else
+            File.join(path, "pak#{i}.pak")
+          end
+        break unless File.exist?(pak_path)
+        pak_paths << pak_path
+        i += 1
+      end
+      # Last pak has load priority
+      paks_by_priority += pak_paths.reverse()
     end
 
-    if pak_paths.size == 0
+    if paks_by_priority.size == 0
       puts("No pak files found")
       return
     end
 
-    # Last pak has load priority
-    paths_by_priority = pak_paths.reverse()
-
     entries_hash = Hash.new
-    paths_by_priority.each do |pak_path|
+    paks_by_priority.each do |pak_path|
       open_pak(pak_path) do |pak_file|
         each_pak_entry(pak_file) do |entry|
           entries_hash[entry.path] ||= []
