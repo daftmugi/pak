@@ -194,4 +194,18 @@ class PAKTest < Minitest::Test
       assert_output(expected, "") { pak.find_duplicates() }
     end
   end
+
+  def test_find_duplicates_checksum
+    pak = PAK.new(paths: ["dups2", "dups"], checksum_duplicates: true)
+
+    expected = <<~EOS
+    [identical]  maps/c.bsp: dups2/pak1.pak, dups/pak3.pak, dups/pak2.pak
+    [identical]  maps/a.bsp: dups2/pak0.pak, dups/pak1.pak, dups/pak0.pak
+    [identical]  maps/b.bsp: dups/pak2.pak, dups/pak1.pak
+    EOS
+
+    Dir.chdir("test_data") do
+      assert_output(expected, "") { pak.find_duplicates() }
+    end
+  end
 end

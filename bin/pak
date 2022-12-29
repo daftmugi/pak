@@ -57,6 +57,7 @@ end
 require "fileutils"
 require "find"
 require "pathname"
+require "zlib"
 
 class PAK
   VERSION = "1.0.1"
@@ -113,6 +114,7 @@ class PAK
       # find duplicates
       paths: nil,
       exclude_paks: [],
+      checksum_duplicates: false,
     }
   end
 
@@ -134,6 +136,10 @@ class PAK
 
   def very_verbose?
     @options[:very_verbose]
+  end
+
+  def checksum_duplicates?
+    @options[:checksum_duplicates]
   end
 
   def run(args)
@@ -165,7 +171,7 @@ class PAK
            #{cmd} -x PAK_FILE [-m REGEX] -d DIR [-L] [-n]
            #{cmd} -p PAK_FILE [-m REGEX]        [-L]
            #{cmd} -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
-           #{cmd} -D [PATHS]  [-m REGEX] [-e EXCLUDE_PAKS]
+           #{cmd} -D [PATHS]  [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
 
     Commands:
         -l PAK_FILE    : list PAK archive files
@@ -192,7 +198,7 @@ class PAK
     cmd = File.basename($0)
 
     <<~EOS
-    Usage: #{cmd} -D [PATHS] [-m REGEX] [-e EXCLUDE_PAKS]
+    Usage: #{cmd} -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
 
     -D [PATHS]
         Find duplicate file paths in pak archives, as Quake would load them.
@@ -221,6 +227,18 @@ class PAK
             "-m 'bsp'" -> match names that include 'dds'
             "-m '\.bsp$'" -> match names that end with '.dds'
             "-m 'maps/.*'" -> match path 'maps'
+
+
+    --checksum
+        Use CRC32 checksum-based file matching.
+        When a file path matches, duplicates are determined by their checksums.
+
+        Output Column Labels:
+
+            Type          File Path  List of Overridden PAK Files
+        ------------  -------------  ----------------------------
+        [identical]     maps/a.bsp:  mod1/pak3.pak, mod4/pak0.pak
+        [identical]     maps/b.bsp:  mod1/pak2.pak, mod2/pak1.pak
 
 
     -e EXCLUDE_PAKS
@@ -281,6 +299,7 @@ class PAK
     opts[:noop]                = args.include?("-n")
     opts[:verbose]             = args.include?("-v")
     opts[:very_verbose]        = args.include?("-vv")
+    opts[:checksum_duplicates] = args.include?("--checksum")
 
     if index = args.find_index("-m")
       opts[:regex] = maybe_regex(args[index + 1])
@@ -505,7 +524,7 @@ class PAK
   end
 
   def pipe_entry(entry, pak_file)
-    stream_entry(entry, pak_file, $stdout)
+    stream_entry(entry, pak_file) { |bytes| $stdout.write(bytes) }
   end
 
 
@@ -582,7 +601,7 @@ class PAK
   def write_entry(entry, pak_file, file_path)
     return if noop?
     File.open(file_path, "wb") do |file|
-      stream_entry(entry, pak_file, file)
+      stream_entry(entry, pak_file) { |bytes| file.write(bytes) }
     end
   end
 
@@ -818,20 +837,66 @@ class PAK
       return
     end
 
-    entries_hash = Hash.new
+    duplicates = Hash.new
     paks_by_priority.each do |pak_path|
       open_pak(pak_path) do |pak_file|
         each_pak_entry(pak_file) do |entry|
-          entries_hash[entry.path] ||= []
-          entries_hash[entry.path] << pak_path
+          duplicates[entry.path] ||= []
+          duplicates[entry.path] << [pak_path, entry]
         end
       end
     end
 
-    entries_hash.each do |path, pak_list|
-      next unless pak_list.size > 1
-      next unless (pak_list - options[:exclude_paks]).size > 0
-      printf("%s: %s\n", path, pak_list.join(", "))
+    duplicates.each do |entry_path, duplicate_entries|
+      next unless duplicate_entries.size > 1 # at least one duplicate
+      paks = duplicate_entries.map(&:first)
+      next unless (paks - options[:exclude_paks]).size > 0 # at least one not excluded
+
+
+      if checksum_duplicates?
+        match_duplicates_by_checksum(entry_path, duplicate_entries)
+      else
+        printf("%s: %s\n", entry_path, duplicate_entries.map(&:first).join(", "))
+      end
+    end
+  end
+
+  def match_duplicates_by_checksum(entry_path, duplicate_entries)
+    size_matches = Hash.new
+    duplicate_entries.each do |pak_path, entry|
+      size_key = [entry_path, entry.size]
+      size_matches[size_key] ||= []
+      size_matches[size_key] << [pak_path, entry]
+    end
+
+    entries_by_pak = Hash.new
+    size_matches.each do |_, entries|
+      next unless entries.size > 1
+      entries.each do |pak_path, entry|
+        entries_by_pak[pak_path] ||= []
+        entries_by_pak[pak_path] << entry
+      end
+    end
+
+    checksum_matches = Hash.new
+    entries_by_pak.each do |pak_path, entries|
+      open_pak(pak_path) do |pak_file|
+        entries.each do |entry|
+          crc = 0
+          stream_entry(entry, pak_file) { |bytes| crc = Zlib.crc32(bytes, crc) }
+          key = [entry.path, crc]
+          checksum_matches[key] ||= []
+          checksum_matches[key] << [pak_path, entry]
+        end
+      end
+    end
+
+    identical_fmt  = "[identical]  %s: %s\n"
+    checksum_matches.each do |_, entries|
+      next unless entries.size > 1
+      entry_path = entries[0][1].path
+      formatted_entries = entries.map(&:first).join(", ")
+      printf(identical_fmt, entry_path, formatted_entries)
     end
   end
 
@@ -861,7 +926,7 @@ class PAK
     pak_file.write(data)
   end
 
-  def stream_entry(entry, pak_file, io)
+  def stream_entry(entry, pak_file, &block)
     pak_file.seek(entry.offset)
     chunk_size = 1024 * 1024
     bytes_remaining = entry.size
@@ -869,7 +934,7 @@ class PAK
     while (bytes_remaining > 0)
       read_size = [chunk_size, bytes_remaining].min()
       bytes = pak_file.read(read_size)
-      io.write(bytes)
+      yield(bytes)
       bytes_remaining -= read_size
     end
   end

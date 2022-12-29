@@ -38,7 +38,7 @@ Usage: pak -l PAK_FILE [-m REGEX]        [-L]      [-v | -vv]
        pak -x PAK_FILE [-m REGEX] -d DIR [-L] [-n]
        pak -p PAK_FILE [-m REGEX]        [-L]
        pak -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
-       pak -D [PATHS]  [-m REGEX] [-e EXCLUDE_PAKS]
+       pak -D [PATHS]  [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
 
 Commands:
     -l PAK_FILE    : list PAK archive files
@@ -64,7 +64,7 @@ Options:
 ## Usage: Find Duplicates
 
 ```
-Usage: pak -D [PATHS] [-m REGEX] [-e EXCLUDE_PAKS]
+Usage: pak -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
 
 -D [PATHS]
     Find duplicate file paths in pak archives, as Quake would load them.
@@ -93,6 +93,18 @@ Usage: pak -D [PATHS] [-m REGEX] [-e EXCLUDE_PAKS]
         "-m 'bsp'" -> match names that include 'dds'
         "-m '.bsp$'" -> match names that end with '.dds'
         "-m 'maps/.*'" -> match path 'maps'
+
+
+--checksum
+    Use CRC32 checksum-based file matching.
+    When a file path matches, duplicates are determined by their checksums.
+
+    Output Column Labels:
+
+        Type          File Path  List of Overridden PAK Files
+    ------------  -------------  ----------------------------
+    [identical]     maps/a.bsp:  mod1/pak3.pak, mod4/pak0.pak
+    [identical]     maps/b.bsp:  mod1/pak2.pak, mod2/pak1.pak
 
 
 -e EXCLUDE_PAKS
