@@ -103,6 +103,29 @@ class PAKTest < Minitest::Test
     assert_output(expected, "") { pak.create_pak() }
   end
 
+  def test_create_to_lower
+    root_path = "test_data/pak_uppercase"
+    pak_write = PAK.new(pak_path: "testout.pak", root_path: root_path, to_lower: true)
+
+    expected = <<~EOS
+    archived  a.txt
+    archived  b.txt
+    archived  c.txt
+    EOS
+
+    io_write = StringIO.new
+    assert_output(expected, "") { pak_write.create_pak(io_write) }
+
+    io_read = StringIO.new(io_write.string)
+    pak_read = PAK.new
+    header = pak_read.read_header(io_read)
+    table = pak_read.read_table(header, io_read)
+
+    expected_paths = ["a.txt", "b.txt", "c.txt"]
+    paths = table.map(&:path)
+    assert_equal(expected_paths, paths)
+  end
+
   def test_file_directory_mismatch_on_disk
     pak = PAK.new(pak_path: "test_data/test_conflicts.pak", root_path: "test_data/conflicts", noop: true)
 

@@ -394,7 +394,7 @@ class PAK
 
   def each_pak_entry(pak_file, &block)
     header = read_header(pak_file)
-    table = extract_table(header, pak_file)
+    table = read_table(header, pak_file)
 
     table.each do |entry|
       yield(entry)
@@ -418,7 +418,7 @@ class PAK
     file.read(4).unpack("V")[0]
   end
 
-  def extract_table(header, pak_file)
+  def read_table(header, pak_file)
     pak_file.seek(header.table_offset)
 
     table = []
@@ -637,27 +637,25 @@ class PAK
   # CREATE
   ######################################################################
 
-  def create_pak
+  def create_pak(io = nil)
     set_options(command: :create)
     validate_options()
 
     pak_path = options[:pak_path]
-    pak_path_expanded = File.expand_path(pak_path)
     root_path = options[:root_path]
 
     raise("Invalid source directory: ''")          if root_path.empty?
-    raise("File already exists: #{pak_path}")      if File.exist?(pak_path)
     raise("Not a directory: #{root_path}")         if File.file?(root_path)
     raise("Directory not found: #{root_path}") unless File.directory?(root_path)
 
-    Dir.chdir(options[:root_path]) do
-      new_pak_file(pak_path_expanded) do |pak_file|
-        entries = archive_files(pak_file)
-        table_offset = archive_table(entries, pak_file)
-        header = Header.new(table_offset: table_offset, num_entries: entries.size)
-        archive_header(header, pak_file)
-      end
+    io ||= new_pak_file(pak_path)
+    Dir.chdir(root_path) do
+      entries = archive_files(io)
+      table_offset = archive_table(entries, io)
+      header = Header.new(table_offset: table_offset, num_entries: entries.size)
+      archive_header(header, io)
     end
+    io.close()
   end
 
   def new_pak_file(path, &block)
@@ -665,6 +663,7 @@ class PAK
       require "stringio"
       StringIO.open("", "wb", &block)
     else
+      raise("File already exists: #{path}") if File.exist?(path)
       File.open(path, "wb", &block)
     end
   end
@@ -684,10 +683,8 @@ class PAK
     table_offset = pak_file.tell()
 
     entries.each do |entry|
-      entry_path = to_lower? ? entry.path.downcase() : entry.path
-
       entry_data = [
-        entry_path.encode("ascii"),
+        entry.path.encode("ascii"),
         entry.offset,
         entry.size
       ]
@@ -718,9 +715,10 @@ class PAK
 
       archive_file(entry, pak_file)
       offset += entry.size
-
-      print_create_entry(entry)
       entries << entry
+
+      entry.path = entry.path.downcase if to_lower?
+      print_create_entry(entry)
     end
 
     print_create_footer(entries)
@@ -756,20 +754,19 @@ class PAK
 
   def print_create_entry(entry)
     action = :archive
-    entry_path = to_lower? ? entry.path.downcase() : entry.path
 
     if verbose?
       entry_data = [strings(action)]
       entry_data << entry.size
       entry_data << entry.offset if very_verbose?
-      entry_data << entry_path
+      entry_data << entry.path
 
       fmt_str = very_verbose? ? "%-8s  %10s  %10s  %s" : "%-8s  %10s  %s"
     else
       fmt_str = "%8s  %s"
       entry_data = [
         strings(action),
-        entry_path,
+        entry.path,
       ]
     end
 
