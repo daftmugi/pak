@@ -91,7 +91,7 @@ Usage: pak -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
     Match file paths by a regular expression
     For example:
         "-m 'bsp'" -> match names that include 'dds'
-        "-m '.bsp$'" -> match names that end with '.dds'
+        "-m '\.bsp$'" -> match names that end with '.dds'
         "-m 'maps/.*'" -> match path 'maps'
 
 
