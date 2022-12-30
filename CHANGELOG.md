@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v1.1.1
+
+* Fix typos in usage.
+
+
 ## v1.1.0
 
 * Add `-m` option for matching by regular expression.
