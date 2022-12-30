@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v1.1.2
+
+* Update usage.
+
+
 ## v1.1.1
 
 * Fix typos in usage.

@@ -60,7 +60,7 @@ require "pathname"
 require "zlib"
 
 class PAK
-  VERSION = "1.1.1"
+  VERSION = "1.1.2"
 
   # 4-byte null-padded ASCII string, two 32-bit unsigned little-endian integers
   HEADER_TEMPLATE = "a4V2"
