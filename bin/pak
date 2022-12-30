@@ -170,7 +170,7 @@ class PAK
     Usage: #{cmd} -l PAK_FILE [-m REGEX]        [-L]      [-v | -vv]
            #{cmd} -x PAK_FILE [-m REGEX] -d DIR [-L] [-n]
            #{cmd} -p PAK_FILE [-m REGEX]        [-L]
-           #{cmd} -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
+           #{cmd} -c PAK_FILE            -d DIR [-L] [-n] [-v | -vv]
            #{cmd} -D [PATHS]  [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
 
     Commands:
@@ -224,8 +224,8 @@ class PAK
     -m REGEX
         Match file paths by a regular expression
         For example:
-            "-m 'bsp'" -> match names that include 'dds'
-            "-m '\\.bsp$'" -> match names that end with '.dds'
+            "-m 'bsp'" -> match names that include 'bsp'
+            "-m '\\.bsp$'" -> match names that end with '.bsp'
             "-m 'maps/.*'" -> match path 'maps'
 
 

@@ -37,7 +37,7 @@
 Usage: pak -l PAK_FILE [-m REGEX]        [-L]      [-v | -vv]
        pak -x PAK_FILE [-m REGEX] -d DIR [-L] [-n]
        pak -p PAK_FILE [-m REGEX]        [-L]
-       pak -c PAK_FILE         -d DIR [-L] [-n] [-v | -vv]
+       pak -c PAK_FILE            -d DIR [-L] [-n] [-v | -vv]
        pak -D [PATHS]  [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
 
 Commands:
@@ -90,8 +90,8 @@ Usage: pak -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
 -m REGEX
     Match file paths by a regular expression
     For example:
-        "-m 'bsp'" -> match names that include 'dds'
-        "-m '\.bsp$'" -> match names that end with '.dds'
+        "-m 'bsp'" -> match names that include 'bsp'
+        "-m '\.bsp$'" -> match names that end with '.bsp'
         "-m 'maps/.*'" -> match path 'maps'
 
 
