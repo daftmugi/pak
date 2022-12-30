@@ -739,6 +739,7 @@ class PAK
   end
 
   def clean_path(path)
+    ensure_one_filename_case(path)
     max_length = ENTRY_PATH_LENGTH - 1 # minus null terminator
 
     if path.length > max_length
@@ -750,6 +751,13 @@ class PAK
     rescue
       raise("Path not ASCII compatible: #{path}")
     end
+  end
+
+  def ensure_one_filename_case(path)
+    @added_file_paths ||= Hash.new
+    match = @added_file_paths[path.downcase]
+    raise("Cannot add: #{path}. Already exists as: #{match}.") if match
+    @added_file_paths[path.downcase] = path
   end
 
   def print_create_entry(entry)

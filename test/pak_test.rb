@@ -126,6 +126,17 @@ class PAKTest < Minitest::Test
     assert_equal(expected_paths, paths)
   end
 
+  def test_create_when_multiple_filenames_cases
+    pak = PAK.new
+
+    pak.clean_path("A.txt")
+    error = assert_raises(RuntimeError) { pak.clean_path("a.txt") }
+    assert_equal(
+      "Cannot add: a.txt. Already exists as: A.txt.",
+      error.message
+    )
+  end
+
   def test_file_directory_mismatch_on_disk
     pak = PAK.new(pak_path: "test_data/test_conflicts.pak", root_path: "test_data/conflicts", noop: true)
 
