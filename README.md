@@ -101,7 +101,7 @@ Usage: pak -D [PATHS] [-m REGEX] [--checksum] [-e EXCLUDE_PAKS]
 
     Output Column Labels:
 
-        Type          File Path  List of Overridden PAK Files
+        Type          File Path  List of Matching PAK Files
     ------------  -------------  ----------------------------
     [identical]     maps/a.bsp:  mod1/pak3.pak, mod4/pak0.pak
     [identical]     maps/b.bsp:  mod1/pak2.pak, mod2/pak1.pak
