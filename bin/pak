@@ -684,7 +684,7 @@ class PAK
 
     entries.each do |entry|
       entry_data = [
-        entry.path.encode("ascii"),
+        entry.path.encode(Encoding::ASCII_8BIT),
         entry.offset,
         entry.size
       ]
@@ -747,7 +747,7 @@ class PAK
     end
 
     begin
-      path.encode("ascii")
+      path.encode(Encoding::ASCII_8BIT)
     rescue
       raise("Path not ASCII compatible: #{path}")
     end
