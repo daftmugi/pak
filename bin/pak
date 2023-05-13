@@ -144,7 +144,7 @@ class PAK
 
   def run(args)
     # For "list" piped to "less", handle "Broken pipe <STDOUT> (Errno::EPIPE)"
-    Signal.trap("SIGPIPE", "SYSTEM_DEFAULT")
+    Signal.trap("SIGPIPE", "SYSTEM_DEFAULT") unless Gem.win_platform?
 
     # For "Ctrl-c" at prompts
     Signal.trap("SIGINT", "SYSTEM_DEFAULT")
