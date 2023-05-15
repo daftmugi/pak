@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v1.1.3
+
+* Add Windows support by fixing a crash on Windows.
+
+
 ## v1.1.2
 
 * Update usage.
